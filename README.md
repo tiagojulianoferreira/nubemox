@@ -1,8 +1,8 @@
-# 🚀 Nubemox - Interface API para Proxmox VE
+# Nubemox - Interface API para Proxmox VE
 
 Este projeto é uma API em Python (Flask) que serve como uma camada de gerenciamento simplificada para um cluster **Proxmox Virtual Environment (PVE)**. Ele permite a automatização de tarefas como listagem, criação e controle de energia de VMs e Contêineres, além do gerenciamento de Resource Pools para multi-tenancy.
 
-## 📋 Requisitos Básicos para Execução
+## Requisitos Básicos para Execução
 
 Para rodar o Nubemox Backend, você precisa de:
 
@@ -28,7 +28,7 @@ Você deve ter acesso a um cluster PVE funcional. As seguintes credenciais devem
 | `PROXMOX_DEFAULT_NODE` | `pve01` | O ID do Node que será usado por padrão nas rotas sem especificação. |
 | `PROXMOX_VERIFY_SSL` | `false` | Defina como `true` se você estiver usando um certificado SSL válido. |
 
-> ⚠️ **IMPORTANTE:** O **API Token** deve ser criado no PVE e ter as permissões necessárias (`PVEAdmin` ou uma Role customizada) para criar VMs/CTs, manipular *Resource Pools* e gerenciar o ciclo de vida dos recursos (`VM.PowerMgmt`, `Pool.Allocate`, etc.).
+>  **IMPORTANTE:** O **API Token** deve ser criado no PVE e ter as permissões necessárias (`PVEAdmin` ou uma Role customizada) para criar VMs/CTs, manipular *Resource Pools* e gerenciar o ciclo de vida dos recursos (`VM.PowerMgmt`, `Pool.Allocate`, etc.).
 
 ### 3\. Execução
 
@@ -46,7 +46,7 @@ O plano atual visa completar o gerenciamento essencial e, em seguida, construir 
 
 | Status | Funcionalidade | ID | Descrição |
 | :--- | :--- | :--- | :--- |
-| ✅ | **Fase 1: Gerenciamento Essencial e Pools (Core)** | |
+| | **Fase 1: Gerenciamento Essencial e Pools (Core)** | |
 | | **Exclusão de VMs (`DELETE`)** | **1.1** | Implementar a rota e o método de serviço para **excluir permanentemente** uma VM (Qemu). |
 | | **Exclusão de CTs (`DELETE`)** | **1.2** | Implementar a rota e o método de serviço para **excluir permanentemente** um Contêiner LXC. |
 | | **Criação de Recurso c/ Pool ID** | **2.2** | Modificar `create_vm()` e `create_container()` para **exigir o `poolid`** e adicionar o recurso ao pool no momento da criação. |
