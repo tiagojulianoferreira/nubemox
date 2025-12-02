@@ -1,10 +1,4 @@
-Excelente ideia\! Uma documentação clara é crucial para o sucesso do projeto.
-
-Aqui está um **`README.md`** objetivo e a **TO DO LIST** com as próximas etapas focadas no isolamento de recursos.
-
------
-
-# 🚀 Nubemox Backend - Interface API para Proxmox VE
+# 🚀 Nubemox - Interface API para Proxmox VE
 
 Este projeto é uma API em Python (Flask) que serve como uma camada de gerenciamento simplificada para um cluster **Proxmox Virtual Environment (PVE)**. Ele permite a automatização de tarefas como listagem, criação e controle de energia de VMs e Contêineres, além do gerenciamento de Resource Pools para multi-tenancy.
 
