@@ -1,8 +1,26 @@
 from flask import jsonify, request, current_app
 from app.api.proxmox import bp
 from app.services.proxmox_service import ProxmoxService
+from proxmoxer import ResourceException
+import re
+# ATENÇÃO: Assumindo que você criou o arquivo app/utils/config_helpers.py
+# Estas funções são necessárias para a rota PUT /cts/<ctid>
+#from app.utils.config_helpers import parse_rootfs_size_gb, reconstruct_rootfs_string
 
-# Rotas de Cluster (Não requerem node na URL)
+# Para simplificar, definiremos as funções helper aqui, mas o ideal é movê-las
+def parse_rootfs_size_gb(rootfs_string: str) -> int:
+    """Extrai o tamanho do disco em GB de uma string rootfs do PVE."""
+    match = re.search(r'size=(\d+)(G|g)', rootfs_string)
+    if match:
+        return int(match.group(1))
+    raise ValueError("Formato de rootfs size inválido ou não encontrado.")
+
+def reconstruct_rootfs_string(rootfs_string: str, new_size_gb: int) -> str:
+    """Substitui o tamanho do disco na string rootfs do PVE."""
+    return re.sub(r'size=\d+[Gg]', f'size={new_size_gb}G', rootfs_string)
+
+
+# --- Rotas de Cluster (Não requerem node na URL) ---
 
 @bp.route('/test', methods=['GET'])
 def test_connection():
@@ -29,32 +47,55 @@ def cluster_summary():
     
     summary = {
         'total_nodes': len(nodes_result['data']),
-        'nodes': [],
+        'nodes': [node_data.get('node') for node_data in nodes_result['data']],
         'total_vms': 'N/A', 
         'total_containers': 'N/A'
     }
     
-    # Coletar dados de cada node (Apenas nomes, sem status detalhado)
-    for node_data in nodes_result['data']:
-        node_summary = {
-            'name': node_data['node'],
-            'status': 'Detalhes via /node/status (serviço otimizado para node padrão)'
-        }
-        summary['nodes'].append(node_summary)
-    
-    return jsonify({
-        'success': True,
-        'data': summary
-    })
+    return jsonify(summary), 200
 
-# Rotas de Node Padrão (Sem Node na URL)
+# --- Rotas de Status e Gerenciamento por Node ---
 
-@bp.route('/node/status', methods=['GET'])
-def node_status():
-    """Obtém status do node padrão"""
+@bp.route('/nodes/<node>/status', methods=['GET'])
+def node_status(node):
+    """Obtém status de um node específico"""
     service = ProxmoxService()
-    result = service.get_node_status()
+    result = service.get_node_status(node)
     return jsonify(result), 200 if result['success'] else 500
+
+@bp.route('/nodes/<node>/vms', methods=['GET'])
+def list_vms_by_node(node):
+    """Lista todas as VMs de um node"""
+    service = ProxmoxService()
+    result = service.get_vms(node)
+    return jsonify(result), 200 if result['success'] else 500
+
+# --- Rotas de Gerenciamento de Resource Pools (NOVAS) ---
+
+@bp.route('/pools', methods=['GET'])
+def list_pools():
+    """Lista todos os Resource Pools"""
+    service = ProxmoxService()
+    result = service.get_pools()
+    return jsonify(result), 200 if result['success'] else 500
+
+@bp.route('/pools', methods=['POST'])
+def create_pool():
+    """Cria um novo Resource Pool (Requer poolid)"""
+    data = request.get_json()
+    
+    if not data or 'poolid' not in data:
+        return jsonify({
+            'success': False,
+            'error': 'O campo poolid é obrigatório para criar um Pool.'
+        }), 400
+        
+    service = ProxmoxService()
+    result = service.create_pool(data.get('poolid'), data.get('comment'))
+    
+    return jsonify(result), 201 if result['success'] else 500
+
+# --- Rotas de Listagem e Criação (Node Padrão) ---
 
 @bp.route('/vms', methods=['GET'])
 def list_vms():
@@ -65,36 +106,21 @@ def list_vms():
 
 @bp.route('/cts', methods=['GET'])
 def list_containers():
-    """Lista todos os containers LXC do node padrão"""
+    """Lista todos os contêineres (CTs) do node padrão"""
     service = ProxmoxService()
     result = service.get_containers()
     return jsonify(result), 200 if result['success'] else 500
 
-@bp.route('/storage', methods=['GET'])
-def list_storage():
-    """Lista storage disponível no node padrão"""
-    service = ProxmoxService()
-    result = service.get_storage()
-    return jsonify(result), 200 if result['success'] else 500
-
-@bp.route('/templates', methods=['GET'])
-def list_templates():
-    """Lista templates disponíveis no node padrão"""
-    service = ProxmoxService()
-    result = service.get_templates()
-    return jsonify(result), 200 if result['success'] else 500
-
-# Rotas de Criação (Node Padrão)
-
 @bp.route('/vms', methods=['POST'])
 def create_vm():
-    """Cria uma nova VM no node padrão"""
+    """Cria uma nova VM no node padrão (poolid obrigatório)"""
     data = request.get_json()
     
-    if not data or 'name' not in data:
+    # Validação do poolid
+    if not data or 'name' not in data or 'poolid' not in data:
         return jsonify({
             'success': False,
-            'error': 'Nome da VM é obrigatório'
+            'error': 'Nome (name) e Pool ID (poolid) são obrigatórios para a criação da VM.'
         }), 400
     
     service = ProxmoxService()
@@ -104,14 +130,14 @@ def create_vm():
 
 @bp.route('/cts', methods=['POST'])
 def create_container():
-    """Cria um novo Contêiner LXC no node padrão"""
+    """Cria um novo Contêiner LXC no node padrão (poolid obrigatório)"""
     data = request.get_json()
     
-    # Validamos 'template' (que mapeia para 'ostemplate' no service) e 'name'
-    if not data or 'name' not in data or 'template' not in data:
+    # Validação do poolid
+    if not data or 'name' not in data or 'template' not in data or 'poolid' not in data:
         return jsonify({
             'success': False,
-            'error': 'Nome (name) e Template (template) são obrigatórios para a criação do Contêiner'
+            'error': 'Nome (name), Template (template) e Pool ID (poolid) são obrigatórios para a criação do Contêiner.'
         }), 400
     
     service = ProxmoxService()
@@ -119,13 +145,20 @@ def create_container():
     
     return jsonify(result), 201 if result['success'] else 500
 
-# Rotas de Status e Ação da VM (Node Padrão)
+# --- Rotas de Ação e Status por ID (VM) ---
 
 @bp.route('/vms/<int:vmid>/status', methods=['GET'])
 def vm_status(vmid):
     """Obtém status de uma VM específica no node padrão"""
     service = ProxmoxService()
     result = service.get_vm_status(vmid)
+    return jsonify(result), 200 if result['success'] else 500
+
+@bp.route('/vms/<int:vmid>/vnc', methods=['GET'])
+def vm_vnc_console(vmid):
+    """Obtém informações para console VNC da VM no node padrão"""
+    service = ProxmoxService()
+    result = service.get_vnc_console(vmid)
     return jsonify(result), 200 if result['success'] else 500
 
 @bp.route('/vms/<int:vmid>/start', methods=['POST'])
@@ -142,76 +175,106 @@ def stop_vm(vmid):
     result = service.stop_vm(vmid)
     return jsonify(result), 200 if result['success'] else 500
 
-# Rotas de Ação do Contêiner (Node Padrão)
+@bp.route('/vms/<int:vmid>', methods=['DELETE'])
+def delete_vm(vmid):
+    """Exclui permanentemente uma VM no node padrão"""
+    service = ProxmoxService()
+    result = service.delete_vm(vmid)
+    return jsonify(result), 200 if result['success'] else 500
+
+# --- Rotas de Ação e Status por ID (CT) ---
 
 @bp.route('/cts/<int:ctid>/status', methods=['GET'])
 def container_status(ctid):
-    """Obtém status de um Contêiner LXC específico no node padrão"""
+    """Obtém status de um Contêiner específico no node padrão"""
     service = ProxmoxService()
     result = service.get_container_status(ctid)
     return jsonify(result), 200 if result['success'] else 500
 
+@bp.route('/cts/<int:ctid>', methods=['PUT'])
+def update_container_resources_route(ctid):
+    """
+    Atualiza recursos (memória, cores, etc.) de um Contêiner LXC.
+    Permite atualização de disco via 'disk_increment_gb'.
+    """
+    data = request.get_json()
+    service = ProxmoxService()
+    
+    disk_increment_gb = data.pop('disk_increment_gb', None)
+    
+    if disk_increment_gb:
+        try:
+            # Requer um novo método no service para buscar a config
+            current_config_result = service.get_container_config(ctid)
+            if not current_config_result['success']:
+                return jsonify(current_config_result), 500
+                
+            current_rootfs_string = current_config_result['data'].get('rootfs')
+            
+            if not current_rootfs_string:
+                return jsonify({'success': False, 'error': 'Configuração de disco (rootfs) não encontrada para o Contêiner.'}), 400
+            
+            increment_value = int(disk_increment_gb)
+            current_size_gb = parse_rootfs_size_gb(current_rootfs_string)
+            
+            new_size_gb = current_size_gb + increment_value
+            
+            if new_size_gb <= current_size_gb:
+                return jsonify({'success': False, 'error': f'O incremento deve resultar em um tamanho maior que o atual ({current_size_gb}G).'}), 400
+            
+            # Formata o novo tamanho no padrão PVE e adiciona ao 'data'
+            data['rootfs'] = reconstruct_rootfs_string(current_rootfs_string, new_size_gb)
+            
+        except ResourceException as e:
+            return jsonify({'success': False, 'error': f"Erro ao buscar configuração do CT para calcular disco: {str(e)}"}), 500
+        except ValueError:
+             return jsonify({'success': False, 'error': 'O valor do incremento de disco deve ser um número inteiro válido.'}), 400
+        
+    # Continua com a atualização de recursos
+    result = service.update_container_resources(ctid, data)
+    
+    return jsonify(result), 200 if result['success'] else 500
+
 @bp.route('/cts/<int:ctid>/start', methods=['POST'])
 def start_container(ctid):
-    """Inicia um Contêiner LXC no node padrão"""
+    """Inicia um Contêiner no node padrão"""
     service = ProxmoxService()
     result = service.start_container(ctid)
     return jsonify(result), 200 if result['success'] else 500
 
 @bp.route('/cts/<int:ctid>/stop', methods=['POST'])
 def stop_container(ctid):
-    """Para um Contêiner LXC no node padrão"""
+    """Para um Contêiner no node padrão"""
     service = ProxmoxService()
     result = service.stop_container(ctid)
     return jsonify(result), 200 if result['success'] else 500
 
-
-@bp.route('/vms/<int:vmid>/console', methods=['GET'])
-def get_vm_console(vmid):
-    """Obtém informações para console VNC da VM no node padrão"""
+@bp.route('/cts/<int:ctid>', methods=['DELETE'])
+def delete_container(ctid):
+    """Exclui permanentemente um Contêiner no node padrão"""
     service = ProxmoxService()
-    result = service.get_vnc_console(vmid)
+    result = service.delete_container(ctid)
     return jsonify(result), 200 if result['success'] else 500
 
-# --- Rotas de Resource Pools ---
+# --- Rotas de Storage (Mantidas) ---
 
-@bp.route('/pools', methods=['GET'])
-def list_pools():
-    """Lista todos os Resource Pools do cluster."""
+@bp.route('/storages', methods=['GET'])
+def list_storages():
+    """Lista todos os storages do cluster"""
     service = ProxmoxService()
-    result = service.get_pools()
+    result = service.get_storages()
     return jsonify(result), 200 if result['success'] else 500
 
-@bp.route('/pools', methods=['POST'])
-def create_pool():
-    """Cria um novo Resource Pool."""
-    data = request.get_json()
-    poolid = data.get('poolid')
-    comment = data.get('comment', "")
-    
-    if not poolid:
-        return jsonify({'success': False, 'error': 'O ID do Pool é obrigatório.'}), 400
-        
+@bp.route('/storages/<storage_id>', methods=['GET'])
+def storage_status(storage_id):
+    """Obtém status de um storage específico"""
     service = ProxmoxService()
-    result = service.create_pool(poolid, comment)
-    return jsonify(result), 201 if result['success'] else 500
-
-@bp.route('/pools/<poolid>/members', methods=['GET'])
-def list_pool_members(poolid):
-    """Lista todos os membros (VMs/CTs) de um Pool."""
-    service = ProxmoxService()
-    result = service.list_pool_vms(poolid)
+    result = service.get_storage_status(storage_id)
     return jsonify(result), 200 if result['success'] else 500
 
-@bp.route('/pools/<poolid>/add_member', methods=['POST'])
-def add_pool_member_route(poolid):
-    """Adiciona uma VM ou CT a um Pool."""
-    data = request.get_json()
-    vmid = data.get('vmid')
-    
-    if not vmid:
-        return jsonify({'success': False, 'error': 'O VMID/CTID (vmid) é obrigatório.'}), 400
-        
+@bp.route('/storages/<storage_id>/content', methods=['GET'])
+def storage_content(storage_id):
+    """Lista o conteúdo de um storage (templates, discos, etc.)"""
     service = ProxmoxService()
-    result = service.add_pool_member(poolid, vmid)
+    result = service.get_storage_content(storage_id)
     return jsonify(result), 200 if result['success'] else 500

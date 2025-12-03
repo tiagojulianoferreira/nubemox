@@ -2,6 +2,8 @@
 
 Este projeto é uma API em Python (Flask) que serve como uma camada de gerenciamento simplificada para um cluster **Proxmox Virtual Environment (PVE)**. Ele permite a automatização de tarefas como listagem, criação e controle de energia de VMs e Contêineres, além do gerenciamento de Resource Pools para multi-tenancy.
 
+Ativando serviços em 3 passos? Esse é desafio que nos propomos. Será que é possível?
+
 ## Requisitos Básicos para Execução
 
 Para rodar o Nubemox Backend, você precisa de:
@@ -40,15 +42,67 @@ python run.py
 
 A API estará acessível em `http://localhost:5000/api/proxmox`.
 
-## 🛠️ Próximas Etapas (TO DO LIST)
+Com prazer!
+
+Aqui está a tabela **API Reference: Gerenciamento de Recursos (Node Padrão)** em formato Markdown. Ela será a base da documentação para o desenvolvedor *frontend* e pode ser incluída diretamente no seu `README.md`.
+
+---
+
+## API Reference: Gerenciamento de Recursos (Nubemox)
+
+Todas as requisições utilizam o prefixo base configurado: **`/api/proxmox`**.
+
+---
+
+### Rotas de Status e Listagem
+
+| Funcionalidade | Endpoint (Prefixo: `/api/proxmox`) | Método | Descrição |
+| :--- | :--- | :--- | :--- |
+| **Teste de Conexão** | `/test` | `GET` | Testa a conectividade e as credenciais com o PVE. |
+| **Listar Nodes** | `/nodes` | `GET` | Lista todos os nodes do cluster. |
+| **Resumo do Cluster** | `/cluster/summary` | `GET` | Resumo simplificado do cluster (Contagem de Nodes). |
+| **Listar VMs** | `/vms` | `GET` | Lista todas as VMs do Node Padrão. |
+| **Listar CTs** | `/cts` | `GET` | Lista todos os Contêineres (CTs) do Node Padrão. |
+| **Listar Pools** | `/pools` | `GET` | Lista todos os Resource Pools criados. |
+| **Status VM** | `/vms/<vmid>/status` | `GET` | Obtém o status em tempo real da VM. |
+| **Status CT** | `/cts/<ctid>/status` | `GET` | Obtém o status em tempo real do CT. |
+| **Console VNC** | `/vms/<vmid>/vnc` | `GET` | Obtém dados para conexão VNC/WebSocket. |
+
+---
+
+### Rotas de Criação e Modificação
+
+| Funcionalidade | Endpoint (Prefixo: `/api/proxmox`) | Método | Descrição |
+| :--- | :--- | :--- | :--- |
+| **Criar Pool** | `/pools` | `POST` | Cria um novo Resource Pool. (Body: `poolid`, `comment`). |
+| **Criar VM** | `/vms` | `POST` | **Cria** uma nova VM. **Requer** `poolid` (Body: `vmid`, `name`, `memory`, `cores`, `storage`, `poolid`). |
+| **Criar CT** | `/cts` | `POST` | **Cria** um novo Contêiner. **Requer** `poolid` (Body: `vmid`, `name`, `template`, `storage`, `poolid`). |
+| **Atualizar CT** | `/cts/<ctid>` | **`PUT`** | **Atualiza recursos** (memória, cores, swap, etc.). Suporta incremento de disco via chave simplificada **`"disk_increment_gb"`**. |
+
+---
+
+### Rotas de Ação e Exclusão
+
+| Funcionalidade | Endpoint (Prefixo: `/api/proxmox`) | Método | Descrição |
+| :--- | :--- | :--- | :--- |
+| **Iniciar VM** | `/vms/<vmid>/start` | `POST` | Inicia a VM. |
+| **Parar VM** | `/vms/<vmid>/stop` | `POST` | Desliga a VM (shutdown gracioso). |
+| **Reiniciar VM** | `/vms/<vmid>/reboot` | `POST` | Reinicia a VM. |
+| **Iniciar CT** | `/cts/<ctid>/start` | `POST` | Inicia o Contêiner. |
+| **Parar CT** | `/cts/<ctid>/stop` | `POST` | Desliga o Contêiner. |
+| **Excluir VM** | `/vms/<vmid>` | `DELETE` | **Exclui permanentemente a VM.** |
+| **Excluir CT** | `/cts/<ctid>` | `DELETE` | **Exclui permanentemente o Contêiner.** |
+
+---
+
+Com as rotas de criação (`POST /vms` e `POST /cts`) atualizadas para exigir o `poolid` (conforme nosso plano de desenvolvimento), podemos agora focar na **implementação dessa validação** e no método de criação de **Resource Pools**.
+## Próximas Etapas (TO DO LIST)
 
 O plano atual visa completar o gerenciamento essencial e, em seguida, construir a base para o isolamento de recursos por usuário (Pools).
 
 | Status | Funcionalidade | ID | Descrição |
 | :--- | :--- | :--- | :--- |
 | | **Fase 1: Gerenciamento Essencial e Pools (Core)** | |
-| | **Exclusão de VMs (`DELETE`)** | **1.1** | Implementar a rota e o método de serviço para **excluir permanentemente** uma VM (Qemu). |
-| | **Exclusão de CTs (`DELETE`)** | **1.2** | Implementar a rota e o método de serviço para **excluir permanentemente** um Contêiner LXC. |
 | | **Criação de Recurso c/ Pool ID** | **2.2** | Modificar `create_vm()` e `create_container()` para **exigir o `poolid`** e adicionar o recurso ao pool no momento da criação. |
 | | **Listagem Otimizada por Pool** | **1.4** | Refatorar rotas de listagem para aceitar `poolid` e listar apenas os recursos daquele pool (base para isolamento). |
 | | **Fase 2: Isolamento (Multi-Tenancy) e ACLs** | |
