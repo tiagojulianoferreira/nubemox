@@ -1,6 +1,6 @@
 # Nubemox - Interface API para Proxmox VE
 
-Este projeto é uma API em Python (Flask) que serve como uma camada de gerenciamento simplificada para um cluster **Proxmox Virtual Environment (PVE)**. Ele permite a automatização de tarefas como listagem, criação e controle de energia de VMs e Contêineres, além do gerenciamento de Resource Pools para multi-tenancy.
+Este projeto é uma API em Python (Flask) que serve como uma camada de gerenciamento simplificada para um cluster **Proxmox Virtual Environment (PVE)**. Ele permite a automatização de tarefas como listagem, criação e controle de VMs e Contêineres, além do gerenciamento de Resource Pools para multi-tenancy.
 
 Ativando serviços em 3 passos? Esse é desafio que nos propomos. Será que é possível?
 
@@ -108,4 +108,4 @@ O plano atual visa completar o gerenciamento essencial e, em seguida, construir 
 | | **Fase 2: Isolamento (Multi-Tenancy) e ACLs** | |
 | | **Criação de Usuário PVE** | **3.1** | Implementar método para **criar um novo usuário PVE** (sem senha, para uso com LDAP) usando a conta Admin do `.env`. |
 | | **Criação de ACLs de Isolamento** | **3.2** | Implementar método para **associar o novo usuário** ao seu Resource Pool exclusivo (`/pool/<poolid>`) com uma **Role restritiva** (`PVEVMUser` ou customizada), garantindo que ele não possa ver outros pools ou recursos. |
-| | **Rotas por Node Específico** | **2.1** | Adaptar rotas de status/criação/ação para permitir a especificação explícita do Node ID na URL. |
+| | **Isolamento LXC** | **2.1** | Garantir que somente sejam criados LXC Unprivileged. |

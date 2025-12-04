@@ -45,3 +45,22 @@ curl -X POST \
       }'
 
 ```
+### Deletar um Pool
+```
+curl -X DELETE   http://localhost:5000/api/proxmox/user-provisioning/pool   -H "Content-Type: application/json"   -d '{
+        "username": "paulo.silva1"
+      }'
+```
+### Cria um CT e atribui ao pool do usuário
+```
+curl -X POST http://localhost:5000/api/proxmox/cts \
+  -H "Content-Type: application/json" \
+  -d '{
+        "name": "container-teste-01",
+        "template": "local:vztmpl/debian-12-standard_12.12-1_amd64.tar.zst",
+        "poolid": "vps-paulo.silva1",
+        "cores": 1,
+        "memory": 512,
+        "storage": "local-lvm"
+      }'
+```

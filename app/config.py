@@ -33,6 +33,12 @@ class Config:
     # CORS
     CORS_ORIGINS = ['http://localhost:3000', 'http://localhost:5173']
 
+    # --- Configurações de Polling para Tarefas Assíncronas ---
+    # Tempo limite em segundos para o Nubemox esperar pela conclusão de tarefas no PVE (5 minutos padrão)
+    PROXMOX_TASK_TIMEOUT = int(os.environ.get('PROXMOX_TASK_TIMEOUT', 300)) 
+    # Intervalo de polling em segundos (5 segundos padrão)
+    PROXMOX_TASK_POLL_INTERVAL = int(os.environ.get('PROXMOX_TASK_POLL_INTERVAL', 5))
+
 class DevelopmentConfig(Config):
     DEBUG = True
 
