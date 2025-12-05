@@ -24,7 +24,7 @@ Ativando serviços em 3 passos? Esse é desafio que nos propomos. Será que é p
 
 1.  **Clone o repositório:**
     ```bash
-    git clone [https://github.com/tiagojulianoferreira/nubemox](https://github.com/tiagojulianoferreira/nubemox)
+    git clone https://github.com/tiagojulianoferreira/nubemox
     cd nubemox
     ```
 
