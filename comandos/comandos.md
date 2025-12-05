@@ -64,3 +64,21 @@ curl -X POST http://localhost:5000/api/proxmox/cts \
         "storage": "local-lvm"
       }'
 ```
+### Cria snapshot
+```
+curl -X POST http://localhost:5000/api/proxmox/cts/101/snapshots \
+  -H "Content-Type: application/json" \
+  -d '{
+        "snapname": "antes-update-01",
+        "description": "Snapshot antes da atualização do sistema",
+        "vmstate": true
+      }'
+```
+### Restaurar snapshot (rollback)
+```
+curl -X POST http://localhost:5000/api/proxmox/cts/101/snapshots/antes-update-01/rollback
+```
+### Delete snapshot
+```
+curl -X DELETE http://localhost:5000/api/proxmox/cts/101/snapshots/antes-update-01
+```
