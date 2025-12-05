@@ -44,10 +44,10 @@ Ativando serviços em 3 passos? Esse é desafio que nos propomos. Será que é p
     Crie um arquivo `.env` na raiz ou exporte as variáveis:
     ```bash
     export PROXMOX_HOST="192.168.1.10"
-    export PROXMOX_USER="root@pam"
+    export PROXMOX_USER="nubemox@pve"
     export PROXMOX_API_TOKEN_NAME="nubemox"
     export PROXMOX_API_TOKEN_VALUE="seu-token-secreto-aqui"
-    export PROXMOX_DEFAULT_NODE="pve-01"
+    export PROXMOX_DEFAULT_NODE="pve-lab"
     # Timeout para tarefas longas (segundos)
     export PROXMOX_TASK_TIMEOUT=300
     ```
