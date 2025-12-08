@@ -1,0 +1,43 @@
+# 1. Unidade Organizacional (OU) para Usuários
+dn: ou=users,dc=nubemox,dc=local
+changetype: add
+objectClass: organizationalUnit
+ou: users
+
+# 2. Unidade Organizacional (OU) para Grupos
+dn: ou=groups,dc=nubemox,dc=local
+changetype: add
+objectClass: organizationalUnit
+ou: groups
+
+# 3. Usuário: Tiago
+dn: cn=tiago,ou=users,dc=nubemox,dc=local
+changetype: add
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+cn: tiago
+sn: Silva
+uid: tiago
+uidNumber: 1000
+gidNumber: 1000
+homeDirectory: /home/tiago
+loginShell: /bin/bash
+mail: tiago@nubemox.local
+userPassword: 123456
+
+# 4. Usuário: Joao
+dn: cn=joao,ou=users,dc=nubemox,dc=local
+changetype: add
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+cn: joao
+sn: Souza
+uid: joao
+uidNumber: 1001
+gidNumber: 1001
+homeDirectory: /home/joao
+loginShell: /bin/bash
+mail: joao@nubemox.local
+userPassword: 123456
