@@ -1,11 +1,12 @@
 # tests/conftest.py
 import pytest
-from unittest.mock import MagicMock
 from flask import Flask
+# IMPORTAÇÃO NOVA (Modular)
+from app.proxmox import ProxmoxService
 
 @pytest.fixture
 def app_context():
-    """Cria um app Flask falso e ativa o contexto para os testes."""
+    """Cria um app Flask falso e ativa o contexto."""
     app = Flask(__name__)
     app.config.update({
         'PROXMOX_HOST': 'mock.pve',
@@ -15,14 +16,27 @@ def app_context():
         'PROXMOX_API_TOKEN_VALUE': 'secret',
         'PROXMOX_DEFAULT_NODE': 'pve-node',
         'PROXMOX_TASK_TIMEOUT': 1,
-        'PROXMOX_TASK_POLL_INTERVAL': 0.1
+        'PROXMOX_VERIFY_SSL': False
     })
     
     with app.app_context():
-        yield
+        yield app
 
 @pytest.fixture
-def mock_proxmox_connection(mocker):
-    """Mocka a classe ProxmoxAPI globalmente."""
-    mock_api = mocker.patch('app.services.proxmox_service.ProxmoxAPI')
-    return mock_api.return_value
+def mock_pve_connection(mocker):
+    """
+    Mocka a conexão lá dentro do client.py.
+    """
+    # Patch no caminho novo: app.proxmox.client
+    mock_class = mocker.patch('app.proxmox.client.ProxmoxAPI')
+    return mock_class.return_value
+
+@pytest.fixture
+def service(app_context, mock_pve_connection):
+    """
+    Entrega uma instância do ProxmoxService pronta para uso nos testes.
+    """
+    svc = ProxmoxService()
+    # Injeta o mock manualmente para garantir que não conecte de verdade
+    svc._connection = mock_pve_connection
+    return svc

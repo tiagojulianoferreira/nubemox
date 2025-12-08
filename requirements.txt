@@ -1,4 +1,4 @@
-Flask==3.0.0
+Flask==2.3.3
 Flask-SQLAlchemy==3.1.1
 Flask-Migrate==4.0.5
 Flask-CORS==4.0.0
@@ -17,5 +17,6 @@ flasgger==0.9.7.1
 pytest==7.4.0
 pytest-mock==3.10.0
 pytest-cov==4.1.0
-flask-jwt-extended==4.4.4
+flask-jwt-extended==4.5.1
 flask-bcrypt==1.0.1
+ldap3==2.9.1
