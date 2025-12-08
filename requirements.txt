@@ -14,3 +14,8 @@ Flask-Marshmallow==1.2.0
 celery==5.3.4
 redis==5.0.1
 flasgger==0.9.7.1
+pytest==7.4.0
+pytest-mock==3.10.0
+pytest-cov==4.1.0
+flask-jwt-extended==4.4.4
+flask-bcrypt==1.0.1
