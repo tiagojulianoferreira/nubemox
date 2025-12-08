@@ -8,3 +8,4 @@ app/api/__pycache__
 app/api/proxmox/__pycache__/
 .env
 htmlcov
+migrations/
