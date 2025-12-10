@@ -73,7 +73,12 @@ class LXCManager:
         return {'message': f'CT {ctid} parado.'}
         
     def delete_container(self, ctid):
+        """
+        Remove o container. Usado na rota DELETE normal 
+        e agora também na limpeza de Zumbis.
+        """
         node_id = self._resolve_node_id()
+        # Chama a API DELETE do Proxmox
         upid = self.connection.nodes(node_id).lxc(ctid).delete()
         self._wait_for_task_completion(upid, node_id)
         return {'message': f'CT {ctid} excluído.'}

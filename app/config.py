@@ -1,5 +1,5 @@
 import os
-from datetime import timedelta
+
 
 class Config:
     # App
@@ -38,6 +38,17 @@ class Config:
     PROXMOX_TASK_TIMEOUT = int(os.environ.get('PROXMOX_TASK_TIMEOUT', 300)) 
     # Intervalo de polling em segundos (5 segundos padrão)
     PROXMOX_TASK_POLL_INTERVAL = int(os.environ.get('PROXMOX_TASK_POLL_INTERVAL', 5))
+    
+    # Endereço do servidor (ex: ldap://localhost:389)
+    LDAP_SERVER = os.environ.get('LDAP_SERVER', 'ldap://localhost:389')
+    
+    # Template para login (DN). 
+    # O {} será substituído pelo username (ex: cn=tiago,ou=users...)
+    # Se não houver no .env, usa o padrão do nosso mock.
+    LDAP_USER_DN_TEMPLATE = os.environ.get('LDAP_USER_DN_TEMPLATE', 'cn={},ou=users,dc=nubemox,dc=local')
+    
+    # Base DN (Opcional, usado se quisermos fazer buscas genéricas)
+    LDAP_BASE_DN = os.environ.get('LDAP_BASE_DN', 'dc=nubemox,dc=local')
 
 class DevelopmentConfig(Config):
     DEBUG = True

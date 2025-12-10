@@ -92,6 +92,10 @@ def register_blueprints(app):
     from app.api.provisioning.routes import bp as provisioning_bp
     app.register_blueprint(provisioning_bp, url_prefix=f"{prefix}/provisioning")
 
+    # Módulo Auth
+    from app.api.auth.routes import bp as auth_bp
+    app.register_blueprint(auth_bp, url_prefix=f"{prefix}/auth")
+
 def register_error_handlers(app):
     """Centraliza o tratamento de exceções da aplicação."""
     

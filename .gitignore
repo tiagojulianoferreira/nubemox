@@ -9,3 +9,5 @@ app/api/proxmox/__pycache__/
 .env
 htmlcov
 migrations/
+instance/
+*/__pycache__/

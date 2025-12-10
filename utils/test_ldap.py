@@ -6,15 +6,15 @@ LDAP_SERVER = 'ldap://localhost:389'
 USER_DN = 'cn=tiago,ou=users,dc=nubemox,dc=local' # DN Completo
 LDAP_PASS = '123456'
 
-print(f"🔌 Tentando conectar e autenticar: {USER_DN}...")
+print(f"Tentando conectar e autenticar: {USER_DN}...")
 
 server = Server(LDAP_SERVER, get_info=ALL)
 conn = Connection(server, user=USER_DN, password=LDAP_PASS)
 
 if not conn.bind():
-    print("❌ FALHA no Bind! Credenciais inválidas.")
+    print("FALHA no Bind! Credenciais inválidas.")
 else:
-    print("✅ SUCESSO! Senha correta.")
+    print("SUCESSO! Senha correta.")
     print(f"   WhoAmI: {conn.extend.standard.who_am_i()}")
     
     # --- BUSCA CORRIGIDA ---
@@ -32,13 +32,13 @@ else:
     
     if conn.entries:
         entry = conn.entries[0]
-        print(f"   ✅ Dados recuperados com sucesso:")
+        print(f"   Dados recuperados com sucesso:")
         print(f"      - Nome: {entry.cn}")
         print(f"      - Email: {entry.mail}")
         print(f"      - UID: {entry.uid}")
         print(f"      - Raw Entry: {entry}")
     else:
-        print("⚠️  A busca não retornou resultados.")
+        print("A busca não retornou resultados.")
         print(f"   Detalhes do erro LDAP: {conn.result}")
 
 conn.unbind()

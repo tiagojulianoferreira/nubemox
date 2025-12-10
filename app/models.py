@@ -1,5 +1,9 @@
 from app.extensions import db, bcrypt
-from datetime import datetime
+from datetime import datetime, timezone
+
+
+def utc_now():
+    return datetime.now(timezone.utc)
 
 # ==========================================
 # 1. GESTÃO DE USUÁRIOS E COTAS
@@ -20,7 +24,7 @@ class User(db.Model):
     # Vínculo com Proxmox: Nome do Pool deste usuário (ex: vps-admin)
     proxmox_pool = db.Column(db.String(64), unique=True, nullable=True)
 
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=utc_now)
     
     # Relacionamentos
     # cascade="all, delete-orphan" remove a cota se o usuário for deletado
@@ -94,7 +98,7 @@ class ServiceTemplate(db.Model):
     logo_url = db.Column(db.String(255))
     is_active = db.Column(db.Boolean, default=True)
 
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=utc_now)
 
     def to_dict(self):
         return {
@@ -138,7 +142,7 @@ class VirtualResource(db.Model):
     memory_mb = db.Column(db.Integer, default=512)
     storage_gb = db.Column(db.Integer, default=8)
     
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=utc_now)
 
     def to_dict(self):
         return {

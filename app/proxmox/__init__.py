@@ -9,12 +9,13 @@ from .resources.network import NetworkManager
 from .resources.storage import StorageManager
 from .resources.pool import PoolManager
 from .resources.snapshot import SnapshotManager
+from .resources.access import AccessManager
 
 # 1. Definir o Blueprint PRIMEIRO para evitar erro de importação
 bp = Blueprint('proxmox', __name__)
 
 # 2. Definir a Classe de Serviço Unificada
-class ProxmoxService(ProxmoxClient, LXCManager, QEMUManager, NetworkManager, StorageManager, PoolManager, SnapshotManager):
+class ProxmoxService(ProxmoxClient, LXCManager, QEMUManager, NetworkManager, StorageManager, PoolManager, SnapshotManager, AccessManager):
     """
     Serviço Unificado (Facade).
     Herda capacidades de conexão (Client) e de gerenciamento (Managers).
