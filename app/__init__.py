@@ -18,6 +18,10 @@ def create_app(config_class=DevelopmentConfig):
     app = Flask(__name__)
     app.config.from_object(config_class)
 
+    # REGISTRO DE COMANDOS (Novo)
+    from app.commands import init_db_command
+    app.cli.add_command(init_db_command)
+
     # Configuração do Swagger
     swagger_config = {
         "headers": [],

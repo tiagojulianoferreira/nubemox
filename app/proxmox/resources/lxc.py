@@ -82,3 +82,10 @@ class LXCManager:
         upid = self.connection.nodes(node_id).lxc(ctid).delete()
         self._wait_for_task_completion(upid, node_id)
         return {'message': f'CT {ctid} excluído.'}
+    
+    def resize_disk(self, vmid, new_size_gb, disk='rootfs'):
+        node_id = self._resolve_node_id()
+        size_str = f"{new_size_gb}G"
+        upid = self.connection.nodes(node_id).lxc(vmid).resize.put(disk=disk, size=size_str)
+        self._wait_for_task_completion(upid, node_id)
+        return {'message': f'Disco redimensionado para {size_str}'}

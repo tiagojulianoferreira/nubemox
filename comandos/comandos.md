@@ -82,3 +82,28 @@ curl -X POST http://localhost:5000/api/proxmox/cts/101/snapshots/antes-update-01
 ```
 curl -X DELETE http://localhost:5000/api/proxmox/cts/101/snapshots/antes-update-01
 ```
+
+### Valida autenticação e exibe o token no console
+```
+# Se o LDAP estiver a rodar e o config.py corrigido
+export TOKEN=$(curl -s -X POST http://localhost:5000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "tiago", "password": "123456"}' | jq -r .access_token)
+
+echo "Token: $TOKEN"
+```
+## Cadastrar Template (is_admin desativado para testes)
+```
+curl -v -X POST http://localhost:5000/api/catalog/templates \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "TesteRotaTemplate",
+    "type": "lxc",
+    "volid": "9000",
+    "category": "os",
+    "description": "Criado sem permissão de admin."
+  }'
+  ```
+  
+
