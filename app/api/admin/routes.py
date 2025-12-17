@@ -6,7 +6,16 @@ from app.extensions import db
 from app.proxmox import proxmox_client
 import math
 
+# Define o prefixo da URL como /api/admin
 bp = Blueprint('admin', __name__, url_prefix='/api/admin')
+
+def check_admin_permission():
+    """Helper para verificar permissão de admin."""
+    current_user_id = int(get_jwt_identity())
+    admin = User.query.get(current_user_id)
+    if not admin or not getattr(admin, 'is_admin', False):
+        return False
+    return True
 
 def get_current_usage(user_id):
     """Calcula o consumo atual de recursos do usuário (Interno)."""
@@ -26,37 +35,7 @@ def get_current_usage(user_id):
 @cross_origin()
 @jwt_required()
 def list_users():
-    """
-    Lista todos os usuários e suas cotas.
-    ---
-    tags:
-      - Admin Users
-    security:
-      - Bearer: []
-    responses:
-      200:
-        description: Lista de usuários recuperada com sucesso
-        schema:
-          type: array
-          items:
-            type: object
-            properties:
-              id:
-                type: integer
-              username:
-                type: string
-              usage:
-                type: object
-              limits:
-                type: object
-      403:
-        description: Acesso negado (Requer Admin)
-    """
-    current_user_id = int(get_jwt_identity())
-    admin = User.query.get(current_user_id)
-    
-    if not admin or not getattr(admin, 'is_admin', False):
-        return jsonify({"error": "Acesso negado. Requer privilégios de Admin."}), 403
+    if not check_admin_permission(): return jsonify({"error": "Acesso negado."}), 403
 
     users = User.query.all()
     output = []
@@ -84,42 +63,7 @@ def list_users():
 @cross_origin()
 @jwt_required()
 def update_user_quota(user_id):
-    """
-    Atualiza as cotas de um usuário.
-    ---
-    tags:
-      - Admin Users
-    security:
-      - Bearer: []
-    parameters:
-      - name: user_id
-        in: path
-        type: integer
-        required: true
-        description: ID do usuário alvo
-      - name: body
-        in: body
-        required: true
-        schema:
-          type: object
-          properties:
-            cpu:
-              type: integer
-            memory:
-              type: integer
-            storage:
-              type: integer
-    responses:
-      200:
-        description: Cota atualizada
-      404:
-        description: Usuário não encontrado
-    """
-    current_user_id = int(get_jwt_identity())
-    admin = User.query.get(current_user_id)
-    
-    if not admin or not getattr(admin, 'is_admin', False):
-        return jsonify({"error": "Acesso negado."}), 403
+    if not check_admin_permission(): return jsonify({"error": "Acesso negado."}), 403
 
     target_user = User.query.get(user_id)
     if not target_user:
@@ -149,17 +93,6 @@ def update_user_quota(user_id):
 @cross_origin()
 @jwt_required()
 def list_templates():
-    """
-    Lista todos os templates cadastrados (Ativos e Inativos).
-    ---
-    tags:
-      - Admin Templates
-    security:
-      - Bearer: []
-    responses:
-      200:
-        description: Lista de templates do banco de dados
-    """
     templates = ServiceTemplate.query.all()
     return jsonify([{
         'id': t.id,
@@ -179,110 +112,95 @@ def list_templates():
 @jwt_required()
 def scan_templates_pve():
     """
-    Scaneia o Proxmox por novos templates (Sem gravar no DB).
-    ---
-    tags:
-      - Admin Templates
-    security:
-      - Bearer: []
-    description: Lê o storage 'local' do Proxmox, calcula tamanho real (GB) e retorna candidatos.
-    responses:
-      200:
-        description: Lista de candidatos encontrados
-        schema:
-          type: array
-          items:
-            type: object
-            properties:
-              volid:
-                type: string
-              name:
-                type: string
-              type:
-                type: string
-              detected_size_gb:
-                type: integer
-      500:
-        description: Erro de conexão com Proxmox
+    Varre o Proxmox em busca de candidatos a template:
+    1. Arquivos ISO/Vztmpl no Storage (Modo File)
+    2. VMs marcadas como Template (Modo Clone)
+    3. LXCs marcados como Template (Modo Clone)
     """
-    try:
-        current_user_id = int(get_jwt_identity())
-        admin = User.query.get(current_user_id)
-        if not getattr(admin, 'is_admin', False): return jsonify({"error": "Acesso negado."}), 403
+    if not check_admin_permission(): return jsonify({"error": "Acesso negado."}), 403
 
+    try:
         node = proxmox_client._resolve_node_id()
         target_storage = 'local' 
         
+        # Lista IDs/Volids já cadastrados para evitar duplicatas
+        existing_volids = [str(t.proxmox_template_volid) for t in ServiceTemplate.query.all()]
+        candidates = []
+
+        # --- 1. SCAN DE ARQUIVOS (Storage) ---
         try:
             contents = proxmox_client.connection.nodes(node).storage(target_storage).content.get()
-        except Exception:
-            return jsonify({'error': f"Não foi possível ler o storage '{target_storage}'."}), 500
-        
-        existing_volids = [t.proxmox_template_volid for t in ServiceTemplate.query.all()]
-        candidates = []
-        
-        for item in contents:
-            volid = item.get('volid')
-            content_type = item.get('content') 
-            size_bytes = int(item.get('size', 0))
-            
-            # Converte Bytes para GB (Arredonda para cima)
-            size_gb = math.ceil(size_bytes / (1024**3))
-            if size_gb < 1: size_gb = 1
+            for item in contents:
+                volid = str(item.get('volid'))
+                content_type = item.get('content') 
+                size_bytes = int(item.get('size', 0))
+                size_gb = math.ceil(size_bytes / (1024**3))
+                if size_gb < 1: size_gb = 1
 
-            if content_type in ['vztmpl', 'iso'] and volid not in existing_volids:
-                candidates.append({
-                    'volid': volid,
-                    'name': volid.split('/')[-1].replace('.iso', '').replace('.tar.zst', ''),
-                    'type': 'lxc' if content_type == 'vztmpl' else 'qemu',
-                    'detected_size_gb': size_gb 
-                })
+                if content_type in ['vztmpl', 'iso'] and volid not in existing_volids:
+                    candidates.append({
+                        'volid': volid,
+                        'name': volid.split('/')[-1].replace('.iso', '').replace('.tar.zst', ''),
+                        'type': 'lxc' if content_type == 'vztmpl' else 'qemu', # Se ISO, sugere QEMU
+                        'detected_size_gb': size_gb,
+                        'origin': 'file' # Flag para definir deploy_mode depois
+                    })
+        except Exception as e:
+            print(f"Aviso Scan Storage: {e}")
+
+        # --- 2. SCAN DE VMS QEMU (Template=1) ---
+        try:
+            qemu_list = proxmox_client.connection.nodes(node).qemu.get()
+            for vm in qemu_list:
+                is_template = vm.get('template') == 1
+                vmid = str(vm.get('vmid'))
+                
+                if is_template and vmid not in existing_volids:
+                    size_bytes = int(vm.get('maxdisk', 0))
+                    size_gb = math.ceil(size_bytes / (1024**3))
+                    
+                    candidates.append({
+                        'volid': vmid,
+                        'name': vm.get('name', f'VM-Template-{vmid}'),
+                        'type': 'qemu',
+                        'detected_size_gb': size_gb,
+                        'origin': 'vm' # Indica Clone
+                    })
+        except Exception as e:
+            print(f"Aviso Scan QEMU: {e}")
+
+        # --- 3. SCAN DE LXC CONTAINERS (Template=1) [NOVO] ---
+        try:
+            lxc_list = proxmox_client.connection.nodes(node).lxc.get()
+            for ct in lxc_list:
+                is_template = ct.get('template') == 1
+                vmid = str(ct.get('vmid'))
+
+                if is_template and vmid not in existing_volids:
+                    size_bytes = int(ct.get('maxdisk', 0))
+                    size_gb = math.ceil(size_bytes / (1024**3))
+
+                    candidates.append({
+                        'volid': vmid,
+                        'name': ct.get('name', f'LXC-Template-{vmid}'),
+                        'type': 'lxc', # Tipo correto
+                        'detected_size_gb': size_gb,
+                        'origin': 'vm' # Indica Clone (tratamos CT como VM para lógica de ID)
+                    })
+        except Exception as e:
+             print(f"Aviso Scan LXC: {e}")
         
         return jsonify(candidates)
 
     except Exception as e:
-        print(f"Erro Scan: {e}")
+        print(f"Erro Crítico Scan: {e}")
         return jsonify({'error': str(e)}), 500
 
 @bp.route('/templates/import', methods=['POST', 'OPTIONS'])
 @cross_origin()
 @jwt_required()
 def import_selected_templates():
-    """
-    Importa templates selecionados para o banco de dados.
-    ---
-    tags:
-      - Admin Templates
-    security:
-      - Bearer: []
-    parameters:
-      - name: body
-        in: body
-        required: true
-        description: Lista de objetos de template selecionados no scan
-        schema:
-          type: object
-          properties:
-            templates:
-              type: array
-              items:
-                type: object
-                properties:
-                  volid:
-                    type: string
-                  name:
-                    type: string
-                  type:
-                    type: string
-                  detected_size_gb:
-                    type: integer
-    responses:
-      200:
-        description: Sucesso na importação
-    """
-    current_user_id = int(get_jwt_identity())
-    admin = User.query.get(current_user_id)
-    if not getattr(admin, 'is_admin', False): return jsonify({"error": "Acesso negado."}), 403
+    if not check_admin_permission(): return jsonify({"error": "Acesso negado."}), 403
 
     data = request.get_json()
     selected_items = data.get('templates', []) 
@@ -291,16 +209,22 @@ def import_selected_templates():
     for item in selected_items:
         exists = ServiceTemplate.query.filter_by(proxmox_template_volid=item['volid']).first()
         if not exists:
+            # Lógica inteligente para definir o modo
+            # Se origin for 'vm' (IDs numéricos de VM ou CT), usamos CLONE.
+            # Se origin for 'file' (caminho de storage), usamos FILE.
+            origin = item.get('origin', 'file')
+            deploy_mode = 'clone' if origin == 'vm' else 'file'
+
             new_tmpl = ServiceTemplate(
                 name=item['name'],
                 proxmox_template_volid=item['volid'],
                 type=item['type'],
-                deploy_mode='file',
+                deploy_mode=deploy_mode,
                 category='os',
-                is_active=False, # Nasce oculto/inativo
+                is_active=False,
                 default_cpu=1,
                 default_memory=512,
-                default_storage=item.get('detected_size_gb', 5) # Usa o tamanho real detectado
+                default_storage=item.get('detected_size_gb', 5)
             )
             db.session.add(new_tmpl)
             added_count += 1
@@ -312,26 +236,7 @@ def import_selected_templates():
 @cross_origin()
 @jwt_required()
 def toggle_template(id):
-    """
-    Ativa ou Desativa um template no catálogo.
-    ---
-    tags:
-      - Admin Templates
-    security:
-      - Bearer: []
-    parameters:
-      - name: id
-        in: path
-        type: integer
-        required: true
-        description: ID do template
-    responses:
-      200:
-        description: Status alterado
-    """
-    current_user_id = int(get_jwt_identity())
-    admin = User.query.get(current_user_id)
-    if not getattr(admin, 'is_admin', False): return jsonify({"error": "Acesso negado."}), 403
+    if not check_admin_permission(): return jsonify({"error": "Acesso negado."}), 403
 
     tmpl = ServiceTemplate.query.get_or_404(id)
     tmpl.is_active = not tmpl.is_active
@@ -343,61 +248,60 @@ def toggle_template(id):
         'message': f'Template {"ativado" if tmpl.is_active else "desativado"}.'
     })
 
-@bp.route('/templates/<int:id>', methods=['PUT', 'OPTIONS'])
+# ==============================================================================
+# ROTA UNIFICADA: UPDATE (PUT) E DELETE (DELETE)
+# ==============================================================================
+@bp.route('/templates/<int:id>', methods=['PUT', 'DELETE', 'OPTIONS'])
 @cross_origin()
 @jwt_required()
-def update_template(id):
-    """
-    Atualiza as configurações padrão de um template (Com trava de disco).
-    ---
-    tags:
-      - Admin Templates
-    security:
-      - Bearer: []
-    parameters:
-      - name: id
-        in: path
-        type: integer
-        required: true
-      - name: body
-        in: body
-        required: true
-        schema:
-          type: object
-          properties:
-            name:
-              type: string
-            category:
-              type: string
-            default_cpu:
-              type: integer
-            default_memory:
-              type: integer
-            default_storage:
-              type: integer
-              description: O valor não pode ser menor que o atual (proteção lógica)
-    responses:
-      200:
-        description: Template atualizado
-    """
-    current_user_id = int(get_jwt_identity())
-    admin = User.query.get(current_user_id)
-    if not getattr(admin, 'is_admin', False): return jsonify({"error": "Acesso negado."}), 403
+def manage_single_template(id):
+    if not check_admin_permission(): return jsonify({"error": "Acesso negado."}), 403
 
     tmpl = ServiceTemplate.query.get_or_404(id)
-    data = request.get_json()
 
-    if 'name' in data: tmpl.name = data['name']
-    if 'category' in data: tmpl.category = data['category']
-    if 'default_cpu' in data: tmpl.default_cpu = int(data['default_cpu'])
-    if 'default_memory' in data: tmpl.default_memory = int(data['default_memory'])
-    
-    # Proteção de Backend para o Disco
-    if 'default_storage' in data: 
-        new_storage = int(data['default_storage'])
-        if new_storage >= tmpl.default_storage:
-            tmpl.default_storage = new_storage
-        # Se for menor, ignora silenciosamente
+    # --- DELETE: REMOVER TEMPLATE ---
+    if request.method == 'DELETE':
+        try:
+            db.session.delete(tmpl)
+            db.session.commit()
+            return jsonify({'success': True, 'message': 'Template removido do catálogo.'})
+        except Exception as e:
+            db.session.rollback()
+            if "foreign key" in str(e).lower():
+                return jsonify({'error': 'Não é possível remover: Existem instâncias usando este template.'}), 409
+            return jsonify({'error': str(e)}), 500
 
-    db.session.commit()
-    return jsonify({'success': True, 'message': 'Template atualizado.'})
+    # --- PUT: ATUALIZAR TEMPLATE ---
+    if request.method == 'PUT':
+        data = request.get_json()
+
+        if 'name' in data: tmpl.name = data['name']
+        if 'category' in data: tmpl.category = data['category']
+        
+        # Atualização de metadados simples
+        if 'is_active' in data: tmpl.is_active = data['is_active']
+        if 'description' in data: tmpl.description = data['description']
+
+        # Atualização de Hardware
+        # Se for Clone, o Backend tenta re-inspecionar a verdade no PVE
+        if getattr(tmpl, 'deploy_mode', 'file') == 'clone':
+             try:
+                # Re-inspeciona se o volid for numérico
+                if str(tmpl.proxmox_template_volid).isdigit():
+                    real = proxmox_client.inspect_resource(int(tmpl.proxmox_template_volid), tmpl.type)
+                    tmpl.default_cpu = real['cpu']
+                    tmpl.default_memory = real['memory']
+                    tmpl.default_storage = real['storage']
+             except:
+                 pass # Se falhar a inspeção, mantém valores antigos
+        else:
+            # Modo File: Aceita input manual
+            if 'default_cpu' in data: tmpl.default_cpu = int(data['default_cpu'])
+            if 'default_memory' in data: tmpl.default_memory = int(data['default_memory'])
+            if 'default_storage' in data: 
+                new_storage = int(data['default_storage'])
+                if new_storage >= tmpl.default_storage:
+                    tmpl.default_storage = new_storage
+
+        db.session.commit()
+        return jsonify({'success': True, 'message': 'Template atualizado.', 'data': tmpl.to_dict()})
