@@ -35,6 +35,45 @@ def get_current_usage(user_id):
 @cross_origin()
 @jwt_required()
 def list_users():
+    """
+    Lista todos os usuários e seus consumos de recursos.
+    ---
+    tags:
+      - Admin Users
+    security:
+      - Bearer: []
+    responses:
+      200:
+        description: Lista de usuários recuperada com sucesso.
+        schema:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+              username:
+                type: string
+              email:
+                type: string
+              is_admin:
+                type: boolean
+              usage:
+                type: object
+                properties:
+                  cpu:
+                    type: integer
+                  memory:
+                    type: integer
+                  storage:
+                    type: integer
+                  count:
+                    type: integer
+              limits:
+                type: object
+      403:
+        description: Acesso negado.
+    """
     if not check_admin_permission(): return jsonify({"error": "Acesso negado."}), 403
 
     users = User.query.all()
@@ -63,6 +102,40 @@ def list_users():
 @cross_origin()
 @jwt_required()
 def update_user_quota(user_id):
+    """
+    Atualiza as cotas (limites) de um usuário específico.
+    ---
+    tags:
+      - Admin Users
+    security:
+      - Bearer: []
+    parameters:
+      - name: user_id
+        in: path
+        type: integer
+        required: true
+        description: ID do usuário alvo
+      - name: body
+        in: body
+        required: true
+        schema:
+          type: object
+          properties:
+            cpu:
+              type: integer
+              description: "Limite de Cores (ex: 4)"
+            memory:
+              type: integer
+              description: "Limite de RAM em MB (ex: 4096)"
+            storage:
+              type: integer
+              description: "Limite de Disco em GB (ex: 50)"
+    responses:
+      200:
+        description: Cota atualizada com sucesso.
+      404:
+        description: Usuário não encontrado.
+    """
     if not check_admin_permission(): return jsonify({"error": "Acesso negado."}), 403
 
     target_user = User.query.get(user_id)
@@ -93,6 +166,33 @@ def update_user_quota(user_id):
 @cross_origin()
 @jwt_required()
 def list_templates():
+    """
+    Lista todos os templates cadastrados no sistema.
+    ---
+    tags:
+      - Admin Templates
+    security:
+      - Bearer: []
+    responses:
+      200:
+        description: Lista de templates.
+        schema:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+              name:
+                type: string
+              deploy_mode:
+                type: string
+                enum: ['clone', 'file', 'create']
+              proxmox_template_volid:
+                type: string
+              is_active:
+                type: boolean
+    """
     templates = ServiceTemplate.query.all()
     return jsonify([{
         'id': t.id,
@@ -112,10 +212,38 @@ def list_templates():
 @jwt_required()
 def scan_templates_pve():
     """
-    Varre o Proxmox em busca de candidatos a template:
-    1. Arquivos ISO/Vztmpl no Storage (Modo File)
-    2. VMs marcadas como Template (Modo Clone)
-    3. LXCs marcados como Template (Modo Clone)
+    Varre o Proxmox em busca de candidatos a template.
+    ---
+    tags:
+      - Admin Templates
+    security:
+      - Bearer: []
+    description: >
+      Busca em 3 locais:
+      1. Storage 'local' por arquivos ISO e Vztmpl (Modo File).
+      2. Lista de VMs QEMU com flag 'template=1' (Modo Clone).
+      3. Lista de Containers LXC com flag 'template=1' (Modo Clone).
+    responses:
+      200:
+        description: Lista de candidatos encontrados no Proxmox.
+        schema:
+          type: array
+          items:
+            type: object
+            properties:
+              volid:
+                type: string
+                description: ID ou Caminho do recurso
+              name:
+                type: string
+              type:
+                type: string
+                enum: ['lxc', 'qemu']
+              origin:
+                type: string
+                enum: ['file', 'vm']
+              detected_size_gb:
+                type: integer
     """
     if not check_admin_permission(): return jsonify({"error": "Acesso negado."}), 403
 
@@ -200,6 +328,39 @@ def scan_templates_pve():
 @cross_origin()
 @jwt_required()
 def import_selected_templates():
+    """
+    Importa templates selecionados para o catálogo.
+    ---
+    tags:
+      - Admin Templates
+    security:
+      - Bearer: []
+    parameters:
+      - name: body
+        in: body
+        required: true
+        schema:
+          type: object
+          properties:
+            templates:
+              type: array
+              items:
+                type: object
+                properties:
+                  volid:
+                    type: string
+                  name:
+                    type: string
+                  type:
+                    type: string
+                  origin:
+                    type: string
+                  detected_size_gb:
+                    type: integer
+    responses:
+      200:
+        description: Templates importados com sucesso.
+    """
     if not check_admin_permission(): return jsonify({"error": "Acesso negado."}), 403
 
     data = request.get_json()
@@ -236,6 +397,22 @@ def import_selected_templates():
 @cross_origin()
 @jwt_required()
 def toggle_template(id):
+    """
+    Alterna o status Ativo/Inativo de um template.
+    ---
+    tags:
+      - Admin Templates
+    security:
+      - Bearer: []
+    parameters:
+      - name: id
+        in: path
+        type: integer
+        required: true
+    responses:
+      200:
+        description: Status alterado com sucesso.
+    """
     if not check_admin_permission(): return jsonify({"error": "Acesso negado."}), 403
 
     tmpl = ServiceTemplate.query.get_or_404(id)
@@ -255,6 +432,61 @@ def toggle_template(id):
 @cross_origin()
 @jwt_required()
 def manage_single_template(id):
+    """
+    Gerencia um template específico (Atualização ou Remoção).
+    ---
+    tags:
+        - Admin Templates
+    put:
+      summary: Atualiza configurações do template
+      description: Atualiza nome, categoria, specs. Se for Clone, tenta sincronizar com Proxmox.
+      
+      security:
+        - Bearer: []
+      parameters:
+        - name: id
+          in: path
+          type: integer
+          required: true
+          description: ID do Template no Banco de Dados
+        - name: body
+          in: body
+          schema:
+            type: object
+            properties:
+              name:
+                type: string
+              category:
+                type: string
+              default_cpu:
+                type: integer
+              default_memory:
+                type: integer
+              default_storage:
+                type: integer
+      responses:
+        200:
+          description: Template atualizado.
+    
+    delete:
+      summary: Remove o template do catálogo
+      description: Apaga o registo local. O recurso no Proxmox NÃO é afetado.
+      tags:
+        - Admin Templates
+      security:
+        - Bearer: []
+      parameters:
+        - name: id
+          in: path
+          type: integer
+          required: true
+          description: ID do Template
+      responses:
+        200:
+          description: Template removido.
+        409:
+          description: "Impossível remover (está em uso)."
+    """
     if not check_admin_permission(): return jsonify({"error": "Acesso negado."}), 403
 
     tmpl = ServiceTemplate.query.get_or_404(id)
