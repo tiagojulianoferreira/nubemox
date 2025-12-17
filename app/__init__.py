@@ -6,19 +6,25 @@ flask.Markup = markupsafe.Markup
 
 from flasgger import Swagger
 from app.config import DevelopmentConfig
-from app.extensions import db, migrate, cors, login_manager, jwt, bcrypt
-from proxmoxer import ResourceException, AuthenticationError
 
-# --- CORREÇÃO 1: Importar a exceção do novo local (client.py) ---
-from app.proxmox.client import ProxmoxTaskFailedError
+# 1. IMPORTAÇÃO CENTRALIZADA (SINGLETON)
+# Agora importamos o proxmox_client daqui, junto com as outras extensões
+from app.extensions import db, migrate, cors, login_manager, jwt, bcrypt, proxmox_client
+
+from proxmoxer import ResourceException, AuthenticationError
+# Ajuste o import abaixo conforme onde definiu sua classe de exceção
+# Se estiver no client.py, mantenha. Se moveu, ajuste.
+from app.proxmox.client import ProxmoxTaskFailedError 
 import logging
+
+from app.api.main import main_bp
 
 def create_app(config_class=DevelopmentConfig):
     """Factory do aplicativo Flask"""
     app = Flask(__name__)
     app.config.from_object(config_class)
 
-    # REGISTRO DE COMANDOS (Novo)
+    # REGISTRO DE COMANDOS
     from app.commands import init_db_command
     app.cli.add_command(init_db_command)
 
@@ -40,16 +46,20 @@ def create_app(config_class=DevelopmentConfig):
     
     swagger = Swagger(app, config=swagger_config)
     
-    # 1. Inicializar extensões
+    # 2. INICIALIZAR EXTENSÕES
+    # Movemos a lógica para a função auxiliar, incluindo o Proxmox
     init_extensions(app)
     
-    # 2. Configurar logging
+    # 3. CONFIGURAR LOGGING
     configure_logging(app)
     
-    # 3. Registrar Rotas e Blueprints
+    # 4. REGISTRAR ROTAS
     register_blueprints(app)
     
-    # 4. Registrar Tratamento de Erros Global
+    # Registra a rota raiz (Health Check / Main)
+    app.register_blueprint(main_bp)
+
+    # 5. TRATAMENTO DE ERROS
     register_error_handlers(app)
     
     @login_manager.user_loader
@@ -63,17 +73,21 @@ def init_extensions(app):
     db.init_app(app)
     migrate.init_app(app, db)
     
-    cors.init_app(app, resources={
-        r"/api/*": {
-            "origins": app.config.get('CORS_ORIGINS', '*'),
-            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-            "allow_headers": ["Content-Type", "Authorization"]
-        }
-    })
+    # Configuração de CORS (Mantida a sua correção anterior)
+    cors.init_app(app, resources={r"/*": {
+        "origins": ["http://localhost:5173", "http://127.0.0.1:5173"],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"],
+        "expose_headers": ["Content-Range", "X-Total-Count"]
+    }}, supports_credentials=True)
     
     login_manager.init_app(app)
     jwt.init_app(app)
     bcrypt.init_app(app)
+
+    # --- INICIALIZAÇÃO DO SINGLETON PROXMOX ---
+    # O objeto já existe (criado em extensions.py), aqui apenas injetamos a config do app.
+    proxmox_client.init_app(app)
 
 def configure_logging(app):
     if not app.debug:
@@ -83,22 +97,21 @@ def register_blueprints(app):
     """Registra os módulos de rotas (Blueprints)."""
     prefix = app.config.get('API_PREFIX', '/api')
 
-    # --- CORREÇÃO 2: Importar do novo módulo modular 'app.proxmox' ---
-    # O __init__.py de app/proxmox expõe o 'bp'
+    # Removemos imports cíclicos ao importar dentro da função
     from app.proxmox import bp as proxmox_bp
     app.register_blueprint(proxmox_bp, url_prefix=f"{prefix}/proxmox")
 
-    # Módulo Catálogo
     from app.api.catalog.routes import bp as catalog_bp
     app.register_blueprint(catalog_bp, url_prefix=f"{prefix}/catalog")
 
-    # Módulo Provisionamento
     from app.api.provisioning.routes import bp as provisioning_bp
     app.register_blueprint(provisioning_bp, url_prefix=f"{prefix}/provisioning")
 
-    # Módulo Auth
     from app.api.auth.routes import bp as auth_bp
     app.register_blueprint(auth_bp, url_prefix=f"{prefix}/auth")
+
+    from app.api.admin.routes import bp as admin_bp
+    app.register_blueprint(admin_bp, url_prefix='/api/admin')
 
 def register_error_handlers(app):
     """Centraliza o tratamento de exceções da aplicação."""
@@ -106,7 +119,6 @@ def register_error_handlers(app):
     @app.errorhandler(ResourceException)
     def handle_proxmox_resource_error(e):
         app.logger.error(f"Proxmox Resource Error: {str(e)}")
-        # Retorna o erro real para facilitar o debug (em prod, oculte isso)
         return jsonify({'success': False, 'error': str(e)}), 500
 
     @app.errorhandler(AuthenticationError)

@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from app.services.ldap_service import LDAPService
-from app.models import User, UserQuota  # <--- CORRIGIDO: Nome atualizado
+from app.models import User
 from app.extensions import db, bcrypt
 
 bp = Blueprint('auth', __name__)
@@ -64,53 +64,39 @@ def login():
 
     ldap_user_data = None
     
-    # 1. TENTATIVA VIA LDAP (Prioritária)
+    # 1. TENTATIVA VIA LDAP
     try:
         ldap_service = LDAPService()
-        # Se conectar, retorna dict com email/dn. Se falhar, retorna None.
         ldap_user_data = ldap_service.authenticate(username, password)
     except Exception as e:
-        print(f"⚠️ Erro ao contactar LDAP: {e}. Tentando login local...")
+        print(f"Erro ao contactar LDAP: {e}. Tentando login local...")
 
     user = User.query.filter_by(username=username).first()
 
     # 2. SINCRONIZAÇÃO OU FALLBACK
     if ldap_user_data:
-        # --- CASO A: Sucesso no LDAP (Shadow User Logic) ---
         if not user:
-            # Cria novo utilizador localmente (Shadow User)
+            # Cria Shadow User
             user = User(
                 username=username, 
                 email=ldap_user_data.get('email', f'{username}@nubemox.local'),
-                is_admin=False # Por segurança, novos do LDAP não são admin
+                is_admin=False 
             )
-            # Senha dummy local (a real está no LDAP)
             user.set_password('ldap-managed-account')
-            
             db.session.add(user)
-            db.session.flush() # Gera o ID para usar na cota
+            db.session.commit() # Commit para gerar ID
             
-            # Cria Cota Padrão (CORRIGIDO PARA UserQuota)
-            default_quota = UserQuota(
-                user_id=user.id,
-                max_vms=2,
-                max_cpu_cores=4,
-                max_memory_mb=4096,
-                max_storage_gb=20
-            )
-            db.session.add(default_quota)
-            db.session.commit()
+            # A criação da cota agora é gerenciada pelo Model/Database ou no primeiro acesso
             print(f"🆕 Shadow User '{username}' criado no banco local via LDAP.")
             
         else:
-            # Atualiza dados existentes se necessário
             email_ldap = ldap_user_data.get('email')
             if email_ldap and user.email != email_ldap:
                 user.email = email_ldap
                 db.session.commit()
     
     else:
-        # --- CASO B: Falha no LDAP -> Tenta Login Local (Ex: Admin CLI) ---
+        # Fallback Local
         if not user or not user.check_password(password):
             return jsonify({"msg": "Credenciais inválidas"}), 401
 
@@ -122,7 +108,9 @@ def login():
         "user": {
             "id": user.id,
             "username": user.username,
-            "is_admin": user.is_admin
+            "is_admin": user.is_admin,
+            # Retorna a cota diretamente (o model já entrega formatado como dict)
+            "quota": user.quota 
         }
     }), 200
 
@@ -166,39 +154,14 @@ def get_current_user_profile():
     if not user:
         return jsonify({"msg": "Usuário não encontrado"}), 404
 
-    # Garante que cota existe (correção para usuários legados)
-    if not user.quota:
-        default_quota = UserQuota(user_id=user.id)
-        db.session.add(default_quota)
-        db.session.commit()
-
-    # Cálculo de uso em tempo real
-    # Como definimos lazy='dynamic' no model User, podemos filtrar
-    # Mas aqui vamos usar a lista carregada
-    resources = user.resources.all()
+    # A propriedade 'quota' no seu model atualizado já retorna o dicionário completo 
+    # com a estrutura {'limit': {...}, 'used': {...}}
+    # Portanto, não precisamos reconstruir o dicionário manualmente aqui.
     
-    used_vms = len(resources)
-    used_cpu = sum(r.cpu_cores for r in resources)
-    used_ram = sum(r.memory_mb for r in resources)
-    used_storage = sum(r.storage_gb for r in resources)
-
     return jsonify({
         "id": user.id,
         "username": user.username,
         "email": user.email,
         "is_admin": user.is_admin,
-        "quota": {
-            "used": {
-                "vms": used_vms,
-                "cpu": used_cpu,
-                "memory": used_ram,
-                "storage": used_storage
-            },
-            "limit": {
-                "vms": user.quota.max_vms,
-                "cpu": user.quota.max_cpu_cores,
-                "memory": user.quota.max_memory_mb,
-                "storage": user.quota.max_storage_gb
-            }
-        }
+        "quota": user.quota 
     })

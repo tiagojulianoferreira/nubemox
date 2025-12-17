@@ -89,3 +89,5 @@ class LXCManager:
         upid = self.connection.nodes(node_id).lxc(vmid).resize.put(disk=disk, size=size_str)
         self._wait_for_task_completion(upid, node_id)
         return {'message': f'Disco redimensionado para {size_str}'}
+    
+   

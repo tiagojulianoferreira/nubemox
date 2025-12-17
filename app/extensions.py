@@ -4,6 +4,7 @@ from flask_cors import CORS
 from flask_login import LoginManager
 from flask_jwt_extended import JWTManager
 from flask_bcrypt import Bcrypt
+from app.proxmox import ProxmoxService
 
 # Inicialização das extensões
 # Nota: A vinculação com o app (init_app) é feita no __init__.py
@@ -13,3 +14,6 @@ cors = CORS()
 login_manager = LoginManager()
 jwt = JWTManager()     # Necessário para autenticação via Token (API)
 bcrypt = Bcrypt()      # Necessário para hash de senhas
+
+# Criamos uma única instância global
+proxmox_client = ProxmoxService()

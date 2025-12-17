@@ -1,262 +1,182 @@
 from flask import Blueprint, jsonify, request, abort
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_cors import cross_origin
 from app.models import ServiceTemplate, User
-from app.extensions import db
+from app.extensions import db, proxmox_client
 
 bp = Blueprint('catalog', __name__)
 
-
-# Helper para verificar Admin
-def ensure_admin():
-    current_user_id = int(get_jwt_identity())
-    user = User.query.get(current_user_id)
+# --- HELPER DE PERMISSÃO ---
+def check_admin_access():
+    """
+    Verifica se o usuário é Admin (flag) ou do grupo 'Admins'.
+    Lança exceção 403 se não for.
+    """
+    user_id = get_jwt_identity()
+    user = User.query.get(user_id)
     
-    # Desativado temporariamente para testes
-    # if not user or not getattr(user, 'is_admin', False):
-    #     abort(403, description="Acesso negado. Apenas administradores.")
-    # return user
+    if not user:
+        abort(403, description="Usuário não encontrado.")
+
+    # 1. Flag direta
+    if user.is_admin:
+        return user
+    
+    # 2. Verificação de Grupo (Case insensitive)
+    if user.group and user.group.name.lower() in ['admins', 'administradores', 'root', 'ti']:
+        return user
+
+    abort(403, description="Acesso restrito a administradores.")
 
 # ----------------------------------------------------------------
-# ROTA PÚBLICA (Para usuários autenticados verem o menu)
+# ROTA PÚBLICA (Para usuários finais - Apenas Ativos)
 # ----------------------------------------------------------------
-@bp.route('/templates', methods=['GET'])
+@bp.route('/templates', methods=['GET', 'OPTIONS'])
+@cross_origin()
 @jwt_required()
 def list_templates():
-    """
-    Lista os templates de serviço disponíveis para provisionamento.
-    
-    Retorna apenas os templates marcados como 'ativos' pelo administrador. 
-    A resposta inclui o objeto 'specs' detalhado, permitindo que o frontend
-    renderize os cards com as informações de hardware (CPU, RAM, Disco)
-    que foram sincronizadas com o Proxmox.
-
-    ---
-    tags:
-      - Catálogo
-    security:
-      - Bearer: []
-    responses:
-      200:
-        description: Lista de templates retornada com sucesso.
-        schema:
-          type: array
-          items:
-            type: object
-            properties:
-              id:
-                type: integer
-                description: ID interno do template no Nubemox
-                example: 1
-              name:
-                type: string
-                example: "Ubuntu 22.04 LTS"
-              description:
-                type: string
-                example: "Imagem oficial mínima pronta para Docker."
-              category:
-                type: string
-                example: "os"
-                description: "Categoria para filtro visual (os, app, database)"
-              type:
-                type: string
-                enum: [lxc, qemu]
-                example: "lxc"
-              logo_url:
-                type: string
-                example: "/assets/logos/ubuntu.png"
-              specs:
-                type: object
-                description: "Especificações de hardware padrão do template (Fonte: PVE)."
-                properties:
-                  cpu:
-                    type: integer
-                    description: "Núcleos de CPU (vCores)"
-                    example: 2
-                  memory:
-                    type: integer
-                    description: "Memória RAM em MB"
-                    example: 1024
-                  storage:
-                    type: integer
-                    description: "Tamanho do Disco em GB"
-                    example: 20
-      401:
-        description: Token de acesso ausente ou inválido.
-    """
-
+    """Lista apenas templates ATIVOS para uso no Deploy."""
     templates = ServiceTemplate.query.filter_by(is_active=True).all()
-    
-    return jsonify([{
-        'id': t.id,
-        'name': t.name,
-        'description': t.description,
-        'logo_url': t.logo_url,
-        'category': getattr(t, 'category', 'os'),
-        'type': t.type,
-        'mode': t.deploy_mode,
-        # O Frontend usa isso para mostrar: "1 vCPU • 512 MB RAM"
-        'specs': {
-            'cpu': getattr(t, 'default_cpu', 1),
-            'memory': getattr(t, 'default_memory', 512),
-            'storage': getattr(t, 'default_storage', 8)
-        }
-    } for t in templates])
+    return jsonify([t.to_dict() for t in templates]), 200
 
 # ----------------------------------------------------------------
-# ROTAS DE ADMINISTRAÇÃO (Cadastro e Edição Sincronizada)
+# ROTAS ADMINISTRATIVAS (CRUD COMPLETO)
 # ----------------------------------------------------------------
 
-@bp.route('/templates', methods=['POST'])
+@bp.route('/admin/templates', methods=['GET', 'OPTIONS'])
+@cross_origin()
 @jwt_required()
-def register_template():
-    """
-    (ADMIN) Cadastra template.
-    Se for Clone (ID numérico), consulta o PVE para preencher as specs automaticamente.
-    """
-    ensure_admin()
-    data = request.get_json() or {}
-    
-    required = ['name', 'type', 'volid']
-    if not all(k in data for k in required):
-        abort(400, description=f"Campos obrigatórios: {', '.join(required)}")
+def list_all_templates_admin():
+    """Lista TODOS os templates (ativos e inativos) para gestão."""
+    check_admin_access()
+    templates = ServiceTemplate.query.order_by(ServiceTemplate.id).all()
+    return jsonify([t.to_dict() for t in templates]), 200
 
-    # Valores padrão iniciais (caso a inspeção falhe)
-    def_cpu = int(data.get('default_cpu', 1))
-    def_mem = int(data.get('default_memory', 512))
-    def_dsk = int(data.get('default_storage', 8))
-    
-    mode = data.get('mode', 'file')
-    
-    # Lógica de Fonte Única da Verdade (PVE)
-    if str(data['volid']).isdigit():
-        mode = 'clone'
-        try:
-            # Importação tardia para evitar ciclo circular
-            from app.proxmox import ProxmoxService
-            service = ProxmoxService()
-            
-            # Chama o INSPETOR (Mixin que lê o config do PVE)
-            # Certifique-se de ter adicionado TemplateInspector no __init__.py
-            specs = service.inspect_resource(data['volid'], data['type'])
-            
-            # Usa o valor do PVE se o admin não forçou outro no JSON
-            if 'default_cpu' not in data: def_cpu = specs['cpu']
-            if 'default_memory' not in data: def_mem = specs['memory']
-            if 'default_storage' not in data: def_dsk = specs['storage']
-            
-            print(f"✅ Template {data['volid']} inspecionado no PVE: {specs}")
-            
-        except Exception as e:
-            print(f"⚠️ Aviso: Não foi possível inspecionar o PVE ({str(e)}). Usando defaults.")
 
-    template = ServiceTemplate(
-        name=data['name'],
-        type=data['type'], # 'lxc' ou 'qemu'
-        proxmox_template_volid=data['volid'],
-        deploy_mode=mode,
-        description=data.get('description', ''),
-        logo_url=data.get('logo_url', ''),
-        category=data.get('category', 'os'),
-        is_active=True,
-        default_cpu=def_cpu,
-        default_memory=def_mem,
-        default_storage=def_dsk
-    )
-    
-    db.session.add(template)
-    db.session.commit()
-    
-    return jsonify({
-        'success': True, 
-        'message': f"Template cadastrado.",
-        'id': template.id,
-        'detected_specs': {'cpu': def_cpu, 'ram': def_mem, 'disk': def_dsk}
-    }), 201
+@bp.route('/templates', methods=['POST', 'OPTIONS'])
+@cross_origin()
+@jwt_required()
+def create_template():
+    """Cria um novo template no catálogo com validação de modo (Clone vs File)."""
+    check_admin_access()
+    data = request.get_json()
 
-@bp.route('/templates/<int:template_id>', methods=['PUT'])
+    # 1. Validação de Campos Obrigatórios
+    if not data.get('name') or not data.get('proxmox_template_volid'):
+        return jsonify({'error': 'Nome e ID/Volid do Proxmox são obrigatórios.'}), 400
+
+    # 2. Validação Lógica de Tipo (Clone vs File)
+    deploy_mode = data.get('deploy_mode', 'clone')
+    volid = str(data.get('proxmox_template_volid'))
+
+    if deploy_mode == 'clone':
+        # Modo CLONE (VM): Exige ID numérico (ex: 100, 101)
+        if not volid.isdigit():
+            return jsonify({'error': 'No modo Clone (VM), o ID deve ser numérico (ex: 100).'}), 400
+    
+    elif deploy_mode == 'file':
+        # Modo FILE (Container Template): Exige string com storage (ex: local:vztmpl/image.tar.zst)
+        if ':' not in volid:
+            return jsonify({'error': 'No modo File (LXC), use o formato Storage:Path (ex: local:vztmpl/ubuntu-22.04.tar.zst).'}), 400
+
+    try:
+        new_tmpl = ServiceTemplate(
+            name=data['name'],
+            type=data.get('type', 'lxc'), # lxc ou qemu
+            proxmox_template_volid=data['proxmox_template_volid'],
+            deploy_mode=deploy_mode,
+            description=data.get('description', ''),
+            category=data.get('category', 'os'),
+            logo_url=data.get('logo_url', ''), # Frontend deve tratar imagem quebrada se vazio
+            is_active=data.get('is_active', True),
+            default_cpu=int(data.get('default_cpu', 1)),
+            default_memory=int(data.get('default_memory', 512)),
+            default_storage=int(data.get('default_storage', 8))
+        )
+
+        db.session.add(new_tmpl)
+        db.session.commit()
+        return jsonify({'success': True, 'message': 'Template criado com sucesso.', 'id': new_tmpl.id}), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@bp.route('/templates/<int:template_id>', methods=['PUT', 'OPTIONS'])
+@cross_origin()
 @jwt_required()
 def update_template(template_id):
     """
-    (ADMIN) Atualiza template.
-    Se alterar CPU/RAM/Disco de um template 'clone', aplica no PVE também.
+    Atualiza um template. 
+    Lógica inteligente: Só tenta sincronizar com Proxmox se for VM/Clone.
+    Se for arquivo (LXC template), apenas salva a string (corrigindo o erro).
     """
-    ensure_admin()
+    check_admin_access()
     template = ServiceTemplate.query.get_or_404(template_id)
-    data = request.get_json() or {}
-    
-    # 1. Captura novos valores
-    old_storage = template.default_storage
-    new_cpu = int(data.get('default_cpu', template.default_cpu))
-    new_mem = int(data.get('default_memory', template.default_memory))
-    new_storage = int(data.get('default_storage', template.default_storage))
-    
-    # 2. Regra de Segurança: Proibido Diminuir Disco via API
-    if new_storage < old_storage:
-        abort(400, description=f"Não é permitido diminuir o disco (Atual: {old_storage}GB). O Proxmox não suporta shrink seguro.")
+    data = request.get_json()
 
-    updated_pve = False
-    pve_error = None
+    try:
+        # 1. Atualiza campos básicos
+        if 'name' in data: template.name = data['name']
+        if 'description' in data: template.description = data['description']
+        if 'proxmox_template_volid' in data: template.proxmox_template_volid = data['proxmox_template_volid']
+        if 'type' in data: template.type = data['type']
+        if 'deploy_mode' in data: template.deploy_mode = data['deploy_mode']
+        if 'logo_url' in data: template.logo_url = data['logo_url']
+        if 'category' in data: template.category = data['category']
+        if 'is_active' in data: template.is_active = bool(data['is_active'])
+        
+        # Atualiza specs manuais (se fornecidas)
+        if 'default_cpu' in data: template.default_cpu = int(data['default_cpu'])
+        if 'default_memory' in data: template.default_memory = int(data['default_memory'])
+        if 'default_storage' in data: template.default_storage = int(data['default_storage'])
 
-    # 3. Sincronização com PVE (Apenas se for Clone e existir no PVE)
-    if template.deploy_mode == 'clone' and str(template.proxmox_template_volid).isdigit():
-        try:
-            from app.proxmox import ProxmoxService
-            service = ProxmoxService()
-            updates = {}
-            
-            # Detecta mudanças em CPU/RAM
-            if new_cpu != template.default_cpu: updates['cores'] = new_cpu
-            if new_mem != template.default_memory: updates['memory'] = new_mem
-            
-            # Aplica CPU/RAM se houver mudanças
-            if updates:
-                if template.type == 'lxc':
-                    service.update_container_resources(template.proxmox_template_volid, updates)
-                    updated_pve = True
-            
-            # Aplica Resize de Disco (Apenas se aumentou)
-            if new_storage > old_storage:
-                if template.type == 'lxc':
-                    # Chama o método resize_disk (Adicionado no LXCManager)
-                    service.resize_disk(template.proxmox_template_volid, new_storage)
-                    updated_pve = True
-                    
-        except Exception as e:
-            pve_error = str(e)
-            # Em caso de erro no PVE, abortamos para evitar inconsistência
-            return jsonify({
-                'success': False,
-                'error': f"Falha ao sincronizar com Proxmox: {pve_error}. Nenhuma alteração foi salva."
-            }), 500
+        # 2. Sincronização Opcional com Proxmox (Apenas para CLONE de VM)
+        # Se estamos corrigindo um erro de arquivo inexistente, NÃO queremos que isso rode e falhe.
+        should_sync = data.get('sync_pve', False) 
+        pve_warning = None
 
-    # 4. Salva no Banco Local
-    template.name = data.get('name', template.name)
-    template.description = data.get('description', template.description)
-    template.logo_url = data.get('logo_url', template.logo_url)
-    template.category = data.get('category', template.category)
-    template.is_active = data.get('is_active', template.is_active)
-    
-    template.default_cpu = new_cpu
-    template.default_memory = new_mem
-    template.default_storage = new_storage
-    
-    db.session.commit()
-    
-    return jsonify({
-        'success': True,
-        'message': 'Template atualizado com sucesso.',
-        'pve_sync': updated_pve,
-        'specs': {'cpu': new_cpu, 'ram': new_mem, 'disk': new_storage}
-    })
+        if should_sync and template.deploy_mode == 'clone' and str(template.proxmox_template_volid).isdigit():
+            try:
+                # Tenta ler a config lá no Proxmox para preencher CPU/RAM automaticamente
+                vmid = int(template.proxmox_template_volid)
+                config = proxmox_client.get_vm_config(vmid) # Você precisará garantir que esse método existe no client.py
+                
+                if config:
+                    template.default_memory = int(config.get('memory', template.default_memory))
+                    # Lógica para cores vs sockets
+                    sockets = int(config.get('sockets', 1))
+                    cores = int(config.get('cores', 1))
+                    template.default_cpu = sockets * cores
+            except Exception as e:
+                pve_warning = f"Dados salvos, mas falha ao sincronizar specs do PVE: {str(e)}"
 
-@bp.route('/templates/<int:template_id>', methods=['DELETE'])
+        db.session.commit()
+        
+        return jsonify({
+            'success': True, 
+            'message': 'Template atualizado.', 
+            'warning': pve_warning,
+            'data': template.to_dict()
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
+@bp.route('/templates/<int:template_id>', methods=['DELETE', 'OPTIONS'])
+@cross_origin()
 @jwt_required()
 def delete_template(template_id):
-    """(ADMIN) Remove do catálogo (não apaga o template do PVE)."""
-    ensure_admin()
+    """Remove o template do catálogo (não deleta do Proxmox)."""
+    check_admin_access()
     template = ServiceTemplate.query.get_or_404(template_id)
     
-    db.session.delete(template)
-    db.session.commit()
-    
-    return jsonify({'success': True, 'message': 'Template removido do catálogo.'})
+    try:
+        db.session.delete(template)
+        db.session.commit()
+        return jsonify({'success': True, 'message': 'Template removido do catálogo.'})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
