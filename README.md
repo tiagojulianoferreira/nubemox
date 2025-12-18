@@ -2,7 +2,11 @@
 
 Este projeto é uma API em Python (Flask) que serve como uma camada de gerenciamento simplificada para um cluster **Proxmox Virtual Environment (PVE)**. Ele permite a automatização de tarefas como listagem, criação e controle de VMs e Contêineres, além do gerenciamento de Resource Pools para multi-tenancy.
 
-![Protítipo de GUI](nubemox.mp4)
+<video width="640" height="480" controls>
+  <source src="nubemox.mp4" type="video/mp4">
+  Criando e removendo serviços a partir dos templates.
+</video>
+
 
 Ativando serviços em 3 passos? Esse é desafio que nos propomos. Será que é possível?
 
