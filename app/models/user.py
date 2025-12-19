@@ -10,6 +10,10 @@ class UserGroup(db.Model):
     name = db.Column(db.String(50), unique=True, nullable=False) # Ex: 'Alunos', 'Docentes'
     description = db.Column(db.String(255))
     
+    # [NOVO] Campo para armazenar o filtro LDAP (Raw Filter)
+    # Permite que o admin cole filtros como: (memberOf=cn=Professores,ou=Grupos...)
+    ldap_filter = db.Column(db.String(1000), nullable=True)
+
     # --- Configurações de Infraestrutura (Infrastructure Policy) ---
     # Define ONDE os recursos deste grupo serão criados fisicamente
     default_storage_pool = db.Column(db.String(50), default='local-lvm') 

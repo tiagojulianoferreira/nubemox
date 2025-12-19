@@ -1,7 +1,8 @@
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from flask_cors import cross_origin
-from app.models import User, VirtualResource, ServiceTemplate
+# Adicionado UserGroup aos imports
+from app.models import User, VirtualResource, ServiceTemplate, UserGroup
 from app.extensions import db
 from app.proxmox import proxmox_client
 import math
@@ -88,6 +89,7 @@ def list_users():
             'username': u.username,
             'email': u.email,
             'is_admin': u.is_admin,
+            'group_name': u.group.name if u.group else 'Padrão (Sem Grupo)',
             'usage': usage,
             'limits': {
                 'cpu': limits.get('cpu', 0),
@@ -144,19 +146,249 @@ def update_user_quota(user_id):
 
     data = request.get_json()
     
-    current_quota = target_user.quota if target_user.quota else {}
-    if 'limit' not in current_quota:
-        current_quota['limit'] = {}
+    # Atualiza overrides
+    if 'cpu' in data: target_user.quota_cpu_override = int(data['cpu'])
+    if 'memory' in data: target_user.quota_memory_override = int(data['memory'])
+    if 'storage' in data: target_user.quota_storage_override = int(data['storage'])
+    # Nota: A lógica original usava um campo JSON 'quota', mas o modelo User agora usa colunas de override.
+    # Se o modelo User tiver um setter híbrido, isso funciona. Caso contrário, ajustado para as colunas:
 
-    if 'cpu' in data: current_quota['limit']['cpu'] = int(data['cpu'])
-    if 'memory' in data: current_quota['limit']['memory'] = int(data['memory'])
-    if 'storage' in data: current_quota['limit']['storage'] = int(data['storage'])
-
-    target_user.quota = dict(current_quota)
     db.session.commit()
     
-    return jsonify({"message": "Cota atualizada com sucesso", "quota": current_quota})
+    # Retorna a cota recalculada
+    return jsonify({"message": "Cota atualizada com sucesso", "quota": target_user.quota})
 
+# ==========================================
+#  GESTÃO DE GRUPOS (USER GROUPS)
+# ==========================================
+
+@bp.route('/groups', methods=['GET', 'OPTIONS'])
+@cross_origin()
+@jwt_required()
+def list_groups():
+    """
+    Lista todos os grupos de usuários.
+    ---
+    tags:
+      - Admin Groups
+    security:
+      - Bearer: []
+    responses:
+      200:
+        description: Lista de grupos
+        schema:
+          type: array
+          items:
+            type: object
+            properties:
+              id: {type: integer}
+              name: {type: string}
+              ldap_filter: {type: string}
+              max_vms: {type: integer}
+              max_cpu: {type: integer}
+              user_count: {type: integer}
+    """
+    if not check_admin_permission(): return jsonify({"error": "Acesso negado."}), 403
+
+    groups = UserGroup.query.all()
+    
+    result = []
+    for g in groups:
+        result.append({
+            'id': g.id,
+            'name': g.name,
+            'description': g.description,
+            'ldap_filter': g.ldap_filter,
+            
+            # Infra Policies
+            'default_storage_pool': g.default_storage_pool,
+            'default_network_bridge': g.default_network_bridge,
+            'default_vlan_tag': g.default_vlan_tag,
+            
+            # Cotas
+            'max_vms': g.max_vms,
+            'max_cpu': g.max_cpu,
+            'max_memory': g.max_memory,
+            'max_storage': g.max_storage,
+            
+            'user_count': g.users.count()
+        })
+        
+    return jsonify(result), 200
+
+@bp.route('/groups', methods=['POST'])
+@cross_origin()
+@jwt_required()
+def create_group():
+    """
+    Cria um novo grupo de usuários.
+    ---
+    tags:
+      - Admin Groups
+    security:
+      - Bearer: []
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          required:
+            - name
+          properties:
+            name:
+              type: string
+            ldap_filter:
+              type: string
+              description: Filtro LDAP (ex memberOf=...)
+            max_vms:
+              type: integer
+            max_cpu:
+              type: integer
+            max_memory:
+              type: integer
+            max_storage:
+              type: integer
+    responses:
+      201:
+        description: Grupo criado
+      409:
+        description: Grupo já existe
+    """
+    if not check_admin_permission(): return jsonify({"error": "Acesso negado."}), 403
+
+    data = request.get_json()
+    if not data or 'name' not in data:
+        return jsonify({"msg": "Nome do grupo é obrigatório"}), 400
+
+    if UserGroup.query.filter_by(name=data['name']).first():
+        return jsonify({"msg": "Grupo já existe"}), 409
+
+    try:
+        new_group = UserGroup(
+            name=data['name'],
+            description=data.get('description'),
+            ldap_filter=data.get('ldap_filter'),
+            
+            # Infra
+            default_storage_pool=data.get('default_storage_pool', 'local-lvm'),
+            default_network_bridge=data.get('default_network_bridge', 'vmbr0'),
+            default_vlan_tag=data.get('default_vlan_tag'), 
+            
+            # Cotas
+            max_vms=data.get('max_vms', 2),
+            max_cpu=data.get('max_cpu', 2),
+            max_memory=data.get('max_memory', 2048),
+            max_storage=data.get('max_storage', 20)
+        )
+
+        db.session.add(new_group)
+        db.session.commit()
+        return jsonify({"msg": "Grupo criado com sucesso", "id": new_group.id}), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"msg": f"Erro ao criar grupo: {str(e)}"}), 500
+
+@bp.route('/groups/<int:id>', methods=['PUT'])
+@cross_origin()
+@jwt_required()
+def update_group(id):
+    """
+    Atualiza um grupo existente.
+    ---
+    tags:
+      - Admin Groups
+    security:
+      - Bearer: []
+    parameters:
+      - in: path
+        name: id
+        type: integer
+        required: true
+      - in: body
+        name: body
+        schema:
+          type: object
+          properties:
+            name: {type: string}
+            ldap_filter: {type: string}
+            max_vms: {type: integer}
+            max_cpu: {type: integer}
+            max_memory: {type: integer}
+            max_storage: {type: integer}
+            default_vlan_tag: {type: integer}
+    responses:
+      200:
+        description: Grupo atualizado
+      404:
+        description: Grupo não encontrado
+    """
+    if not check_admin_permission(): return jsonify({"error": "Acesso negado."}), 403
+
+    group = UserGroup.query.get_or_404(id)
+    data = request.get_json()
+
+    try:
+        if 'name' in data: group.name = data['name']
+        if 'description' in data: group.description = data['description']
+        if 'ldap_filter' in data: group.ldap_filter = data['ldap_filter']
+
+        # Infra
+        if 'default_storage_pool' in data: group.default_storage_pool = data['default_storage_pool']
+        if 'default_network_bridge' in data: group.default_network_bridge = data['default_network_bridge']
+        if 'default_vlan_tag' in data: group.default_vlan_tag = data['default_vlan_tag']
+
+        # Cotas
+        if 'max_vms' in data: group.max_vms = int(data['max_vms'])
+        if 'max_cpu' in data: group.max_cpu = int(data['max_cpu'])
+        if 'max_memory' in data: group.max_memory = int(data['max_memory'])
+        if 'max_storage' in data: group.max_storage = int(data['max_storage'])
+
+        db.session.commit()
+        return jsonify({"msg": "Grupo atualizado com sucesso"}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"msg": f"Erro ao atualizar: {str(e)}"}), 500
+
+@bp.route('/groups/<int:id>', methods=['DELETE'])
+@cross_origin()
+@jwt_required()
+def delete_group(id):
+    """
+    Remove um grupo (apenas se não houver usuários).
+    ---
+    tags:
+      - Admin Groups
+    security:
+      - Bearer: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        type: integer
+    responses:
+      200:
+        description: Grupo removido
+      400:
+        description: Grupo possui usuários vinculados
+    """
+    if not check_admin_permission(): return jsonify({"error": "Acesso negado."}), 403
+
+    group = UserGroup.query.get_or_404(id)
+    
+    # Validação: Não deletar se tiver usuários
+    if group.users.count() > 0:
+        return jsonify({"msg": "Não é possível excluir grupo que possui usuários vinculados."}), 400
+
+    try:
+        db.session.delete(group)
+        db.session.commit()
+        return jsonify({"msg": "Grupo removido com sucesso"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"msg": f"Erro ao remover: {str(e)}"}), 500
 
 # ==========================================
 #  GESTÃO DE TEMPLATES (CURADORIA)
